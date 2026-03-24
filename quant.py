@@ -6,7 +6,7 @@ import sys
 import time
 from datetime import datetime
 
-# Windows下禁用快速编辑模式（防止点击窗口暂停程序）
+# Windows下禁用快速编辑模式
 if os.name == 'nt':
     try:
         import ctypes
@@ -15,22 +15,96 @@ if os.name == 'nt':
         ENABLE_EXTENDED_FLAGS = 0x0080
         handle = kernel32.GetStdHandle(STD_INPUT_HANDLE)
         kernel32.SetConsoleMode(handle, ENABLE_EXTENDED_FLAGS)
-        print("✅ 已禁用快速编辑模式，程序不会因点击窗口而暂停")
     except:
         pass
 
 class PersistentMarketMonitor:
     """全A股监控系统（完整配置从CSV读取）"""
 
-    def __init__(self, config_file='config.csv'):
+    def __init__(self, config_file='config.csv', position_file='position.py'):
         self.config_file = config_file
+        self.position_file = position_file
+
+        # 从CSV加载配置
         self.load_config()
+
+        # 加载交易状态
         self.load_state()
+
+        # 加载初始持仓配置（如果有position.py）
+        self.load_initial_positions()
+
+        # 运行参数
         self.running = False
+
+        # 市场数据
         self.market_data = {}
         self.last_update = None
         self.valid_codes = []
+
+        # 加载股票代码
         self.load_stock_codes()
+
+    def load_initial_positions(self):
+        """从position.py加载初始持仓"""
+        if os.path.exists(self.position_file):
+            try:
+                # 动态导入position.py
+                import importlib.util
+                spec = importlib.util.spec_from_file_location("position_config", self.position_file)
+                position_config = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(position_config)
+
+                initial_positions = getattr(position_config, 'INITIAL_POSITIONS', {})
+
+                if initial_positions:
+                    print(f"✅ 检测到position.py，加载初始持仓: {len(initial_positions)} 只")
+
+                    # 合并到现有持仓
+                    for code, pos_data in initial_positions.items():
+                        if code not in self.positions:
+                            self.positions[code] = {
+                                'shares': pos_data.get('shares', 0),
+                                'buy_price': pos_data.get('buy_price', 0),
+                                'buy_time': datetime.now(),
+                                'name': pos_data.get('name', code)
+                            }
+                            print(f"   添加持仓: {code} {pos_data.get('name', '')} {pos_data.get('shares', 0)}股")
+
+                    # 保存更新后的状态
+                    self.save_state()
+                    self.save_positions_csv()
+
+                else:
+                    print(f"📝 position.py存在但INITIAL_POSITIONS为空，跳过加载")
+
+            except Exception as e:
+                print(f"❌ 加载position.py失败: {e}")
+        else:
+            print(f"📝 未找到{self.position_file}，按空仓启动")
+            # 创建空的position.py文件
+            self.create_empty_position_file()
+
+    def create_empty_position_file(self):
+        """创建空的position.py文件"""
+        try:
+            with open(self.position_file, 'w', encoding='utf-8') as f:
+                f.write('''# position.py
+# 持仓配置文件
+# 程序启动时会读取这个文件，按持仓继续模拟操作
+
+INITIAL_POSITIONS = {
+    # 格式: '股票代码': {'shares': 持仓数量, 'buy_price': 买入价格, 'name': '股票名称'}
+
+    # 示例（取消注释即可使用）：
+    # '600519': {'shares': 100, 'buy_price': 1800.0, 'name': '贵州茅台'},
+    # '000858': {'shares': 200, 'buy_price': 150.0, 'name': '五粮液'},
+
+}
+''')
+            print(f"✅ 已创建 {self.position_file}")
+        except Exception as e:
+            print(f"❌ 创建{self.position_file}失败: {e}")
 
     def load_config(self):
         """从CSV加载配置"""
@@ -591,6 +665,7 @@ class PersistentMarketMonitor:
         print("  全A股监控系统（完整配置版）")
         print("="*70)
         print(f"  配置文件: {self.config_file}")
+        print(f"  持仓配置: {self.position_file}")
         print(f"  初始资金: ¥{self.initial_capital:,.0f}")
         print(f"  买入评分: >= {self.buy_score}分")
         print(f"  更新间隔: {self.update_interval}秒")
@@ -673,8 +748,9 @@ class PersistentMarketMonitor:
         print(f"  总收益率: {ret:+.2f}%")
         print(f"\n  文件:")
         print(f"  - 配置: {self.config_file}")
-        print(f"  - 持仓: {self.positions_file}")
-        print(f"  - 交易: {self.trades_file}")
+        print(f"  - 持仓配置: {self.position_file}")
+        print(f"  - 持仓文件: {self.positions_file}")
+        print(f"  - 交易文件: {self.trades_file}")
 
 # ================================================
 #                     主程序
@@ -683,5 +759,5 @@ if __name__ == "__main__":
     print("="*70)
     print("  全A股监控系统（完整配置版）")
     print("="*70)
-    monitor = PersistentMarketMonitor(config_file='config.csv')
+    monitor = PersistentMarketMonitor(config_file='config.csv', position_file='position.py')
     monitor.run()
