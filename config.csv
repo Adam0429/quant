@@ -1,0 +1,55 @@
+# 量化交易系统配置文件
+# 修改后重启程序生效
+
+# ====== 账户参数 ======
+参数名,参数值,说明
+initial_capital,100000,初始资金(元)
+update_interval,60,更新间隔(秒)
+max_position,5,最大持仓数量
+position_size,0.2,单票仓位比例(0.2=20%)
+
+# ====== 交易参数 ======
+stop_loss,-0.05,止损比例(-0.05=-5%)
+take_profit,0.1,止盈比例(0.10=10%)
+buy_score,65,买入最低评分(建议60-75)
+
+# ====== 选股参数-涨幅 ======
+score_pct_min,1.0,"涨幅适中下限(%),建议1-2"
+score_pct_max,6.0,"涨幅适中上限(%),建议5-8"
+score_pct_min_small,0.0,"小涨幅下限(%),建议0"
+score_pct_max_small,1.0,"小涨幅上限(%),建议1"
+score_pct_big,9.5,"涨停阈值(%),超过不买"
+score_pct_down,-5.0,"跌幅阈值(%),超过不买"
+score_pct_points,25,"涨幅适中分数,建议20-30"
+score_pct_small_points,10,"小涨幅分数,建议5-15"
+
+# ====== 选股参数-换手率 ======
+score_turnover_min,2.0,"换手率适中下限(%),建议1-3"
+score_turnover_max,10.0,"换手率适中上限(%),建议8-15"
+score_turnover_points,20,"换手率分数,建议15-25"
+
+# ====== 选股参数-成交额 ======
+score_amount_min,300000000,"放量阈值(元),300000000=3亿"
+score_amount_points,15,"放量分数,建议10-20"
+
+# ====== 选股参数-高开 ======
+score_open_points,10,"高开分数(现价>开盘),建议5-15"
+
+# ====== 选股参数-新高 ======
+score_high_pct,0.98,"接近新高比例,0.98=今日最高价的98%"
+score_high_points,10,"新高分数,建议5-15"
+
+# ====== 选股参数-PE ======
+score_pe_min,5.0,"PE适中下限,建议5-10"
+score_pe_max,60.0,"PE适中上限,建议50-80"
+score_pe_points,10,"PE合理分数,建议5-15"
+
+# ====== 选股参数-市值 ======
+score_cap_min,50.0,"市值适中下限(亿),建议50-100"
+score_cap_max,2000.0,"市值适中上限(亿),建议1000-3000"
+score_cap_points,10,"市值适中分数,建议5-15"
+
+# ====== 文件参数(一般不改) ======
+state_file,trading_state.json,状态文件
+positions_file,positions.csv,持仓文件
+trades_file,trades.csv,交易记录文件
