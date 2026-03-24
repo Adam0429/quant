@@ -5,6 +5,7 @@ import os
 import sys
 import time
 from datetime import datetime
+import pandas as pd
 
 # Windows下禁用快速编辑模式
 if os.name == 'nt':
@@ -46,44 +47,96 @@ class PersistentMarketMonitor:
         self.load_stock_codes()
 
     def load_initial_positions(self):
-        """从positions.csv加载初始持仓"""
-        if os.path.exists(self.position_file):
-            try:
-                # 动态导入positions.csv
-                import importlib.util
-                spec = importlib.util.spec_from_file_location("position_config", self.position_file)
-                position_config = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(position_config)
-
-                initial_positions = getattr(position_config, 'INITIAL_POSITIONS', {})
-
-                if initial_positions:
-                    print(f"✅ 检测到positions.csv，加载初始持仓: {len(initial_positions)} 只")
-
-                    # 合并到现有持仓
-                    for code, pos_data in initial_positions.items():
-                        if code not in self.positions:
-                            self.positions[code] = {
-                                'shares': pos_data.get('shares', 0),
-                                'buy_price': pos_data.get('buy_price', 0),
-                                'buy_time': datetime.now(),
-                                'name': pos_data.get('name', code)
-                            }
-                            print(f"   添加持仓: {code} {pos_data.get('name', '')} {pos_data.get('shares', 0)}股")
-
-                    # 保存更新后的状态
-                    self.save_state()
-                    self.save_positions_csv()
-
-                else:
-                    print(f"📝 positions.csv存在但INITIAL_POSITIONS为空，跳过加载")
-
-            except Exception as e:
-                print(f"❌ 加载positions.csv失败: {e}")
-        else:
+        """从positions.csv加载初始持仓（以CSV为准覆盖当前持仓）"""
+        if not os.path.exists(self.position_file):
             print(f"📝 未找到{self.position_file}，按空仓启动")
-            # 创建空的positions.csv文件
             self.create_empty_position_file()
+            return
+
+        try:
+            df = pd.read_csv(self.position_file, encoding='utf-8-sig')
+
+            if df.empty:
+                print(f"📝 {self.position_file} 为空，按空仓启动")
+                return
+
+            # 删除全空行
+            df = df.dropna(how='all')
+
+            # 必要列检查
+            required_cols = ['股票代码', '股票名称', '持仓数量', '买入价格']
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            if missing_cols:
+                print(f"❌ {self.position_file} 格式错误，缺少列: {', '.join(missing_cols)}")
+                return
+
+            # 清洗股票代码，过滤掉“汇总”“账户汇总”等非持仓行
+            df['股票代码'] = df['股票代码'].astype(str).str.strip()
+            df = df[df['股票代码'].str.match(r'^\d{6}$', na=False)]
+
+            if df.empty:
+                print(f"📝 {self.position_file} 中没有有效持仓记录")
+                return
+
+            new_positions = {}
+            loaded_count = 0
+
+            for _, row in df.iterrows():
+                try:
+                    code = str(row.get('股票代码', '')).strip()
+                    name = str(row.get('股票名称', code)).strip()
+
+                    shares_raw = row.get('持仓数量', 0)
+                    buy_price_raw = row.get('买入价格', 0)
+                    buy_time_raw = row.get('买入时间', '')
+
+                    shares = int(float(shares_raw)) if pd.notna(shares_raw) and str(shares_raw).strip() != '' else 0
+                    buy_price = float(buy_price_raw) if pd.notna(buy_price_raw) and str(
+                        buy_price_raw).strip() != '' else 0.0
+
+                    # 解析买入时间
+                    buy_time = datetime.now()
+                    if pd.notna(buy_time_raw):
+                        time_str = str(buy_time_raw).strip()
+                        if time_str:
+                            for fmt in (
+                                    "%Y-%m-%d %H:%M:%S",
+                                    "%Y-%m-%d %H:%M:%S.%f",
+                                    "%Y-%m-%dT%H:%M:%S",
+                                    "%Y-%m-%dT%H:%M:%S.%f",
+                            ):
+                                try:
+                                    buy_time = datetime.strptime(time_str, fmt)
+                                    break
+                                except ValueError:
+                                    pass
+
+                    # 跳过无效记录
+                    if not code or shares <= 0 or buy_price <= 0:
+                        continue
+
+                    new_positions[code] = {
+                        'shares': shares,
+                        'buy_price': buy_price,
+                        'buy_time': buy_time,
+                        'name': name
+                    }
+                    loaded_count += 1
+                    print(f"   加载持仓: {code} {name} {shares}股 成本{buy_price:.2f}")
+
+                except Exception as row_e:
+                    print(f"   跳过一行异常数据: {row_e}")
+
+            # 关键改动：以 CSV 为准覆盖当前持仓
+            self.positions = new_positions
+
+            print(f"✅ 检测到{self.position_file}，成功加载初始持仓: {loaded_count} 只")
+
+            # 这里只保存状态，不调用 save_positions_csv，避免触发你别处的除零问题
+            self.save_state()
+
+        except Exception as e:
+            print(f"❌ 加载{self.position_file}失败: {e}")
 
     def create_empty_position_file(self):
         """创建空的positions.csv文件"""
