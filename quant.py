@@ -21,7 +21,7 @@ if os.name == 'nt':
 class PersistentMarketMonitor:
     """全A股监控系统（完整配置从CSV读取）"""
 
-    def __init__(self, config_file='config.csv', position_file='position.csv'):
+    def __init__(self, config_file='config.csv', position_file='positions.csv'):
         self.config_file = config_file
         self.position_file = position_file
 
@@ -31,7 +31,7 @@ class PersistentMarketMonitor:
         # 加载交易状态
         self.load_state()
 
-        # 加载初始持仓配置（如果有position.csv）
+        # 加载初始持仓配置（如果有positions.csv）
         self.load_initial_positions()
 
         # 运行参数
@@ -46,10 +46,10 @@ class PersistentMarketMonitor:
         self.load_stock_codes()
 
     def load_initial_positions(self):
-        """从position.csv加载初始持仓"""
+        """从positions.csv加载初始持仓"""
         if os.path.exists(self.position_file):
             try:
-                # 动态导入position.csv
+                # 动态导入positions.csv
                 import importlib.util
                 spec = importlib.util.spec_from_file_location("position_config", self.position_file)
                 position_config = importlib.util.module_from_spec(spec)
@@ -58,7 +58,7 @@ class PersistentMarketMonitor:
                 initial_positions = getattr(position_config, 'INITIAL_POSITIONS', {})
 
                 if initial_positions:
-                    print(f"✅ 检测到position.csv，加载初始持仓: {len(initial_positions)} 只")
+                    print(f"✅ 检测到positions.csv，加载初始持仓: {len(initial_positions)} 只")
 
                     # 合并到现有持仓
                     for code, pos_data in initial_positions.items():
@@ -76,20 +76,20 @@ class PersistentMarketMonitor:
                     self.save_positions_csv()
 
                 else:
-                    print(f"📝 position.csv存在但INITIAL_POSITIONS为空，跳过加载")
+                    print(f"📝 positions.csv存在但INITIAL_POSITIONS为空，跳过加载")
 
             except Exception as e:
-                print(f"❌ 加载position.csv失败: {e}")
+                print(f"❌ 加载positions.csv失败: {e}")
         else:
             print(f"📝 未找到{self.position_file}，按空仓启动")
-            # 创建空的position.csv文件
+            # 创建空的positions.csv文件
             self.create_empty_position_file()
 
     def create_empty_position_file(self):
-        """创建空的position.csv文件"""
+        """创建空的positions.csv文件"""
         try:
             with open(self.position_file, 'w', encoding='utf-8') as f:
-                f.write('''# position.csv
+                f.write('''# positions.csv
 # 持仓配置文件
 # 程序启动时会读取这个文件，按持仓继续模拟操作
 
@@ -759,5 +759,5 @@ if __name__ == "__main__":
     print("="*70)
     print("  全A股监控系统（完整配置版）")
     print("="*70)
-    monitor = PersistentMarketMonitor(config_file='config.csv', position_file='position.csv')
+    monitor = PersistentMarketMonitor(config_file='config.csv', position_file='positions.csv')
     monitor.run()
