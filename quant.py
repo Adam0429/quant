@@ -21,7 +21,7 @@ if os.name == 'nt':
 class PersistentMarketMonitor:
     """全A股监控系统（完整配置从CSV读取）"""
 
-    def __init__(self, config_file='config.csv', position_file='position.py'):
+    def __init__(self, config_file='config.csv', position_file='position.csv'):
         self.config_file = config_file
         self.position_file = position_file
 
@@ -31,7 +31,7 @@ class PersistentMarketMonitor:
         # 加载交易状态
         self.load_state()
 
-        # 加载初始持仓配置（如果有position.py）
+        # 加载初始持仓配置（如果有position.csv）
         self.load_initial_positions()
 
         # 运行参数
@@ -759,5 +759,5 @@ if __name__ == "__main__":
     print("="*70)
     print("  全A股监控系统（完整配置版）")
     print("="*70)
-    monitor = PersistentMarketMonitor(config_file='config.csv', position_file='position.py')
+    monitor = PersistentMarketMonitor(config_file='config.csv', position_file='position.csv')
     monitor.run()
