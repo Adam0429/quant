@@ -1,0 +1,1 @@
+python -m PyInstaller -F quant.py --clean ^  --exclude-module matplotlib ^  --exclude-module IPython ^  --exclude-module notebook ^  --exclude-module jupyter ^  --exclude-module scipy

@@ -215,6 +215,8 @@ INITIAL_POSITIONS = {
                 self.score_cap_min = float(config.get('score_cap_min', 50.0))
                 self.score_cap_max = float(config.get('score_cap_max', 2000.0))
                 self.score_cap_points = int(config.get('score_cap_points', 10))
+                # 新增：最大买入信号数量
+                self.max_buy_signals = int(config.get('max_buy_signals', 10))
                 self.state_file = config.get('state_file', 'trading_state.json')
                 self.positions_file = config.get('positions_file', 'positions.csv')
                 self.trades_file = config.get('trades_file', 'trades.csv')
@@ -222,6 +224,7 @@ INITIAL_POSITIONS = {
                 print(f"✅ 加载配置成功: {self.config_file}")
                 print(f"   初始资金: ¥{self.initial_capital:,.0f}")
                 print(f"   买入评分: >= {self.buy_score}分")
+                print(f"   最大买入信号数量: {self.max_buy_signals}")
             except Exception as e:
                 print(f"❌ 加载配置失败: {e}")
                 self.init_default_config()
@@ -260,6 +263,8 @@ INITIAL_POSITIONS = {
         self.score_cap_min = 50.0
         self.score_cap_max = 2000.0
         self.score_cap_points = 10
+        # 新增：最大买入信号数量
+        self.max_buy_signals = 10
         self.state_file = 'trading_state.json'
         self.positions_file = 'positions.csv'
         self.trades_file = 'trades.csv'
@@ -289,6 +294,8 @@ INITIAL_POSITIONS = {
                 writer.writerow(['score_turnover_min', self.score_turnover_min, '换手率下限(%)'])
                 writer.writerow(['score_turnover_max', self.score_turnover_max, '换手率上限(%)'])
                 writer.writerow(['score_turnover_points', self.score_turnover_points, '换手率分数'])
+                # 新增：最大买入信号数量
+                writer.writerow(['max_buy_signals', self.max_buy_signals, '最大买入信号数量'])
                 writer.writerow(['score_amount_min', self.score_amount_min, '放量阈值(元)'])
                 writer.writerow(['score_amount_points', self.score_amount_points, '放量分数'])
                 writer.writerow(['score_open_points', self.score_open_points, '高开分数'])
@@ -322,13 +329,30 @@ INITIAL_POSITIONS = {
         self.fetch_all_stock_codes()
 
     def fetch_all_stock_codes(self):
-        """获取所有A股代码"""
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        prefixes = ['600', '601', '603', '605', '000', '001', '002', '003']
+        """获取所有A股代码（含主板、创业板、科创板）"""
+        # 修复：添加完整的请求头
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': '://stock.qq.com/',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        }        # 添加创业板(300)和科创板(688)前缀
+        prefixes = [
+            '600', '601', '603', '605',  # 主板上海
+            '000', '001', '002', '003',  # 主板深圳
+            '300',  # 创业板
+            '688'  # 科创板
+        ]
         all_candidates = []
         for prefix in prefixes:
-            for i in range(1000):
-                all_candidates.append(f"{prefix}{i:03d}")
+            # 科创板(688)只有3位数字
+            if prefix == '688':
+                for i in range(1000):
+                    all_candidates.append(f"{prefix}{i:03d}")
+            else:
+                for i in range(1000):
+                    all_candidates.append(f"{prefix}{i:03d}")
+
         print(f"待验证: {len(all_candidates)} 个代码")
         valid_codes = []
         batch_size = 800
@@ -336,9 +360,15 @@ INITIAL_POSITIONS = {
             batch = all_candidates[start:start + batch_size]
             code_list = []
             for c in batch:
-                market = 'sh' if c.startswith('6') else 'sz'
+                # 市场分配规则：
+                # 600/601/603/605/688开头 → 上海市场(sh)
+                # 000/001/002/003/300开头 → 深圳市场(sz)
+                if c.startswith(('600', '601', '603', '605', '688')):
+                    market = 'sh'
+                else:
+                    market = 'sz'
                 code_list.append(f'{market}{c}')
-            url = f'https://qt.gtimg.cn/q={",".join(code_list)}'
+            url = f'http://qt.gtimg.cn/q={",".join(code_list)}'
             try:
                 r = requests.get(url, headers=headers, timeout=10)
                 for line in r.text.strip().split('\n'):
@@ -357,7 +387,19 @@ INITIAL_POSITIONS = {
                 print(f"\n  批次获取失败，跳过: {e}")
                 continue
             time.sleep(0.2)
-        print(f"\n\n✅ 获取完成: {len(valid_codes)} 只主板股票")
+
+        # 统计各板块数量
+        main_sh = sum(1 for c in valid_codes if c.startswith(('600', '601', '603', '605')))
+        main_sz = sum(1 for c in valid_codes if c.startswith(('000', '001', '002', '003')))
+        gem = sum(1 for c in valid_codes if c.startswith('300'))
+        star = sum(1 for c in valid_codes if c.startswith('688'))
+
+        print(f"\n\n✅ 获取完成: {len(valid_codes)} 只股票")
+        print(f"   主板上海: {main_sh} 只")
+        print(f"   主板深圳: {main_sz} 只")
+        print(f"   创业板: {gem} 只")
+        print(f"   科创板: {star} 只")
+
         data = [{'code': c} for c in valid_codes]
         with open('a_stock_codes.json', 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False)
@@ -490,7 +532,7 @@ INITIAL_POSITIONS = {
             return 0.0
 
     def get_market_data(self):
-        """获取实时行情"""
+        """获取实时行情（支持主板、创业板、科创板）"""
         try:
             print("  获取市场数据...")
             if not self.valid_codes:
@@ -504,12 +546,25 @@ INITIAL_POSITIONS = {
                 batch = self.valid_codes[start:start + batch_size]
                 code_list = []
                 for code in batch:
-                    market = 'sh' if code.startswith('6') else 'sz'
+                    if code.startswith(('600', '601', '603', '605', '688')):
+                        market = 'sh'
+                    else:
+                        market = 'sz'
                     code_list.append(f'{market}{code}')
-                url = f'https://qt.gtimg.cn/q={",".join(code_list)}'
-                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                url = f'http://qt.gtimg.cn/q={",".join(code_list)}'
+                # 修复：添加完整的请求头
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Referer': 'http://stock.qq.com/',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Connection': 'keep-alive',
+                }
                 try:
                     r = requests.get(url, headers=headers, timeout=10)
+                    # 修复：指定 GBK 编码
+                    r.encoding = 'gbk'
                     for line in r.text.strip().split('\n'):
                         if '=' not in line or '~' not in line:
                             continue
@@ -537,12 +592,22 @@ INITIAL_POSITIONS = {
                     success_batches += 1
                 except Exception as e:
                     failed_batches += 1
+                    print(f"\n  批次失败: {e}")
                     continue
                 time.sleep(0.1)
             if all_stocks:
                 self.market_data = all_stocks
                 self.last_update = datetime.now()
-                print(f"  ✅ 获取: {len(all_stocks)} 只 ({success_batches}批成功, {failed_batches}批失败)")
+
+                # 统计各板块
+                main_sh = sum(1 for s in all_stocks.values() if s['code'].startswith(('600', '601', '603', '605')))
+                main_sz = sum(1 for s in all_stocks.values() if s['code'].startswith(('000', '001', '002', '003')))
+                gem = sum(1 for s in all_stocks.values() if s['code'].startswith('300'))
+                star = sum(1 for s in all_stocks.values() if s['code'].startswith('688'))
+
+                print(f"  ✅ 获取: {len(all_stocks)} 只")
+                print(f"     主板上海: {main_sh} | 主板深圳: {main_sz} | 创业板: {gem} | 科创板: {star}")
+                print(f"     成功批次: {success_batches} | 失败批次: {failed_batches}")
                 return True
             else:
                 print(f"  ⚠️ 未获取到数据")
@@ -570,6 +635,7 @@ INITIAL_POSITIONS = {
         if change_pct <= self.score_pct_down:
             return 0, ['跌幅大']
 
+        # 涨幅得分（保持原有逻辑）
         if self.score_pct_min <= change_pct <= self.score_pct_max:
             score += self.score_pct_points
             reasons.append(f'涨{change_pct:.1f}%')
@@ -577,26 +643,37 @@ INITIAL_POSITIONS = {
             score += self.score_pct_small_points
             reasons.append('小涨')
 
-        if self.score_turnover_min <= turnover <= self.score_turnover_max:
-            score += self.score_turnover_points
+        # 换手率得分 - 改为线性得分，换手率越高分数越高
+        if turnover >= self.score_turnover_min:
+            # 计算换手率得分比例（0-1之间）
+            turnover_ratio = min(1.0, (turnover - self.score_turnover_min) /
+                                 (self.score_turnover_max - self.score_turnover_min))
+            # 计算实际得分（0到满分之间）
+            turnover_score = turnover_ratio * self.score_turnover_points
+            score += turnover_score
             reasons.append(f'换{turnover:.1f}%')
 
+        # 放量得分（保持原有逻辑）
         if amount > self.score_amount_min:
             score += self.score_amount_points
             reasons.append('放量')
 
+        # 高开得分（保持原有逻辑）
         if price > open_price:
             score += self.score_open_points
             reasons.append('高开')
 
+        # 新高得分（保持原有逻辑）
         if high > 0 and price >= high * self.score_high_pct:
             score += self.score_high_points
             reasons.append('新高')
 
+        # PE得分（保持原有逻辑）
         if self.score_pe_min <= pe <= self.score_pe_max:
             score += self.score_pe_points
             reasons.append('PE合理')
 
+        # 市值得分（保持原有逻辑）
         cap = stock['market_cap'] / 1e8
         if self.score_cap_min <= cap <= self.score_cap_max:
             score += self.score_cap_points
@@ -669,7 +746,8 @@ INITIAL_POSITIONS = {
 
     def clear_screen(self):
         """清屏"""
-        print('\033[2J\033[H', end='')
+        # print('\033[2J\033[H', end='')
+        pass
 
     def display_status(self, buy_signals, sell_signals):
         """显示状态"""
@@ -708,7 +786,7 @@ INITIAL_POSITIONS = {
         for s in top5:
             print(f"    {s['code']} {s['name']:<10} {s['price']:>8.2f} +{s['change_pct']:.2f}%")
         print(f"\n  买入信号(>={self.buy_score}分):")
-        for s in buy_signals[:5]:
+        for s in buy_signals[:self.max_buy_signals]:
             print(f"    [+] {s['code']} {s['name']:<10} {s['score']}分 | {', '.join(s['reasons'][:3])}")
         if sell_signals:
             print(f"\n  卖出信号:")
@@ -743,21 +821,21 @@ INITIAL_POSITIONS = {
                 now = datetime.now()
                 current_time = now.hour * 100 + now.minute
                 is_trading = (930 <= current_time <= 1130) or (1300 <= current_time <= 1500)
-                if not is_trading:
-                    self.clear_screen()
-                    print("="*70)
-                    print("  全A股监控系统（完整配置版）")
-                    print("="*70)
-                    print(f"\n  当前: {now.strftime('%Y-%m-%d %H:%M:%S')}")
-                    print(f"\n  非交易时间")
-                    print(f"  交易: 09:30-11:30, 13:00-15:00")
-                    print(f"\n  等待开盘...")
-                    print(f"  配置文件: {self.config_file}")
-                    if time.time() - last_save_time >= 60:
-                        self.save_positions_csv()
-                        last_save_time = time.time()
-                    time.sleep(60)
-                    continue
+                # if not is_trading:
+                #     self.clear_screen()
+                #     print("="*70)
+                #     print("  全A股监控系统（完整配置版）")
+                #     print("="*70)
+                #     print(f"\n  当前: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+                #     print(f"\n  非交易时间")
+                #     print(f"  交易: 09:30-11:30, 13:00-15:00")
+                #     print(f"\n  等待开盘...")
+                #     print(f"  配置文件: {self.config_file}")
+                #     if time.time() - last_save_time >= 60:
+                #         self.save_positions_csv()
+                #         last_save_time = time.time()
+                #     time.sleep(60)
+                #     continue
                 print(f"\n获取数据... {now.strftime('%H:%M:%S')}")
                 success = self.get_market_data()
                 if success:
