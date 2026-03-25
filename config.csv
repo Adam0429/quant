@@ -13,6 +13,19 @@ stop_loss,-0.05,止损比例(-0.05=-5%)
 take_profit,0.1,止盈比例(0.10=10%)
 buy_score,65,买入最低评分(建议60-75)
 
+# ====== 板块参数 ======
+include_main_board,1,是否监控主板(1=是,0=否)
+include_gem_board,1,是否监控创业板(1=是,0=否)
+include_star_board,1,是否监控科创板(1=是,0=否)
+
+# ====== 板块特定参数 ======
+score_pct_big_main,9.5,主板涨停阈值(%)
+score_pct_down_main,-5.0,主板跌停阈值(%)
+score_pct_big_gem,19.0,创业板涨停阈值(%)
+score_pct_down_gem,-15.0,创业板跌停阈值(%)
+score_pct_big_star,19.0,科创板涨停阈值(%)
+score_pct_down_star,-15.0,科创板跌停阈值(%)
+
 # ====== 选股参数-涨幅 ======
 score_pct_min,1.0,"涨幅适中下限(%),建议1-2"
 score_pct_max,6.0,"涨幅适中上限(%),建议5-8"
@@ -27,6 +40,9 @@ score_pct_small_points,10,"小涨幅分数,建议5-15"
 score_turnover_min,2.0,"换手率适中下限(%),建议1-3"
 score_turnover_max,10.0,"换手率适中上限(%),建议8-15"
 score_turnover_points,20,"换手率分数,建议15-25"
+
+# ====== 选股参数-信号数量 ======
+max_buy_signals,20,最大买入信号数量(建议5-20)
 
 # ====== 选股参数-成交额 ======
 score_amount_min,300000000,"放量阈值(元),300000000=3亿"

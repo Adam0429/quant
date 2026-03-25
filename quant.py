@@ -56,101 +56,133 @@ class PersistentMarketMonitor:
         try:
             new_positions = {}
             loaded_count = 0
+            capital_from_csv = None  # 从CSV中读取的可用资金
+            initial_capital_from_csv = None  # 从CSV中读取的初始资金
 
             with open(self.position_file, 'r', encoding='utf-8-sig') as f:
                 reader = csv.reader(f)
+                rows = list(reader)  # 读取所有行
 
-                # 读取表头
-                header = next(reader, None)
-                if header is None:
-                    print(f"📝 {self.position_file} 为空，按空仓启动")
+            if not rows:
+                print(f"📝 {self.position_file} 为空，按空仓启动")
+                return
+
+            # 先检查最后一行是否是账户汇总行
+            last_row = rows[-1] if rows else []
+            if len(last_row) > 0 and last_row[0] == '账户汇总':
+                # 解析账户汇总行，提取可用资金和初始资金
+                for i, cell in enumerate(last_row):
+                    if '可用资金:' in cell:
+                        try:
+                            # 提取数字部分
+                            value_str = cell.split(':')[1].strip()
+                            capital_from_csv = float(value_str)
+                        except:
+                            pass
+                    elif '初始资金:' in cell:
+                        try:
+                            value_str = cell.split(':')[1].strip()
+                            initial_capital_from_csv = float(value_str)
+                        except:
+                            pass
+
+            # 处理表头和数据行
+            header = rows[0]
+            data_rows = rows[1:]  # 跳过表头
+
+            # 检查必要列
+            required_cols = ['股票代码', '股票名称', '持仓数量', '买入价格']
+            col_indices = {}
+            for col in required_cols:
+                if col in header:
+                    col_indices[col] = header.index(col)
+                else:
+                    print(f"❌ {self.position_file} 格式错误，缺少列: {col}")
                     return
 
-                # 检查必要列
-                required_cols = ['股票代码', '股票名称', '持仓数量', '买入价格']
-                col_indices = {}
-                for col in required_cols:
-                    if col in header:
-                        col_indices[col] = header.index(col)
-                    else:
-                        print(f"❌ {self.position_file} 格式错误，缺少列: {col}")
-                        return
+            # 逐行读取数据
+            for row in data_rows:
+                if not row:  # 跳过空行
+                    continue
 
-                # 逐行读取数据
-                for row in reader:
-                    if not row:  # 跳过空行
-                        continue
+                # 检查是否遇到汇总行或账户汇总行
+                if len(row) > 0 and (row[0] == '汇总' or row[0] == '账户汇总'):
+                    print(f"✅ 遇到{row[0]}行，停止读取持仓数据")
+                    break
 
-                    # 检查是否遇到汇总行
-                    if len(row) > 0 and row[0] == '汇总':
-                        print(f"✅ 遇到汇总行，停止读取持仓数据")
-                        break
+                # 获取各列数据
+                code = row[col_indices['股票代码']].strip() if col_indices['股票代码'] < len(row) else ''
+                name = row[col_indices['股票名称']].strip() if col_indices['股票名称'] < len(row) else code
+                shares_raw = row[col_indices['持仓数量']] if col_indices['持仓数量'] < len(row) else '0'
+                buy_price_raw = row[col_indices['买入价格']] if col_indices['买入价格'] < len(row) else '0'
 
-                    # 获取各列数据
-                    code = row[col_indices['股票代码']].strip() if col_indices['股票代码'] < len(row) else ''
-                    name = row[col_indices['股票名称']].strip() if col_indices['股票名称'] < len(row) else code
-                    shares_raw = row[col_indices['持仓数量']] if col_indices['持仓数量'] < len(row) else '0'
-                    buy_price_raw = row[col_indices['买入价格']] if col_indices['买入价格'] < len(row) else '0'
+                # 跳过无效股票代码（非六位数字）
+                if not code or not code.isdigit() or len(code) != 6:
+                    continue
 
-                    # 跳过无效股票代码（非六位数字）
-                    if not code or not code.isdigit() or len(code) != 6:
-                        continue
+                # 转换数据
+                try:
+                    shares = int(float(shares_raw)) if shares_raw.strip() != '' else 0
+                    buy_price = float(buy_price_raw) if buy_price_raw.strip() != '' else 0.0
+                except (ValueError, TypeError):
+                    shares = 0
+                    buy_price = 0.0
 
-                    # 转换数据
-                    try:
-                        shares = int(float(shares_raw)) if shares_raw.strip() != '' else 0
-                        buy_price = float(buy_price_raw) if buy_price_raw.strip() != '' else 0.0
-                    except (ValueError, TypeError):
-                        shares = 0
-                        buy_price = 0.0
+                # 跳过无效记录
+                if shares <= 0 or buy_price <= 0:
+                    continue
 
-                    # 跳过无效记录
-                    if shares <= 0 or buy_price <= 0:
-                        continue
-
-                    # 解析买入时间（如果存在）
-                    buy_time = datetime.now()
-                    if '买入时间' in header:
-                        buy_time_idx = header.index('买入时间')
-                        if buy_time_idx < len(row):
-                            buy_time_str = row[buy_time_idx].strip()
-                            if buy_time_str:
-                                for fmt in (
+                # 解析买入时间（如果存在）
+                buy_time = datetime.now()
+                if '买入时间' in header:
+                    buy_time_idx = header.index('买入时间')
+                    if buy_time_idx < len(row):
+                        buy_time_str = row[buy_time_idx].strip()
+                        if buy_time_str:
+                            for fmt in (
                                     "%Y-%m-%d %H:%M:%S",
                                     "%Y-%m-%d %H:%M:%S.%f",
                                     "%Y-%m-%dT%H:%M:%S",
                                     "%Y-%m-%dT%H:%M:%S.%f",
-                                ):
-                                    try:
-                                        buy_time = datetime.strptime(buy_time_str, fmt)
-                                        break
-                                    except ValueError:
-                                        pass
+                            ):
+                                try:
+                                    buy_time = datetime.strptime(buy_time_str, fmt)
+                                    break
+                                except ValueError:
+                                    pass
 
-                    # 存储持仓数据
-                    new_positions[code] = {
-                        'shares': shares,
-                        'buy_price': buy_price,
-                        'buy_time': buy_time,
-                        'name': name
-                    }
-                    loaded_count += 1
-                    print(f"   加载持仓: {code} {name} {shares}股 成本{buy_price:.2f}")
+                # 存储持仓数据
+                new_positions[code] = {
+                    'shares': shares,
+                    'buy_price': buy_price,
+                    'buy_time': buy_time,
+                    'name': name
+                }
+                loaded_count += 1
+                print(f"   加载持仓: {code} {name} {shares}股 成本{buy_price:.2f}")
 
             # 以 CSV 为准覆盖当前持仓
             self.positions = new_positions
+
+            # 恢复可用资金和初始资金
+            if capital_from_csv is not None:
+                self.capital = capital_from_csv
+                print(f"📝 从CSV恢复可用资金: ¥{self.capital:,.2f}")
+
+            if initial_capital_from_csv is not None:
+                self.initial_capital = initial_capital_from_csv
+                print(f"📝 从CSV恢复初始资金: ¥{self.initial_capital:,.2f}")
 
             if loaded_count > 0:
                 print(f"✅ 检测到{self.position_file}，成功加载初始持仓: {loaded_count} 只")
             else:
                 print(f"📝 {self.position_file} 中没有有效持仓记录")
 
-            # 保存状态
+            # 保存状态，确保资金信息被持久化
             self.save_state()
 
         except Exception as e:
             print(f"❌ 加载{self.position_file}失败: {e}")
-
 
     def create_empty_position_file(self):
         """创建空的positions.csv文件"""
@@ -411,15 +443,22 @@ INITIAL_POSITIONS = {
             try:
                 with open(self.state_file, 'r', encoding='utf-8') as f:
                     state = json.load(f)
+
+                # 优先使用状态文件中的可用资金
                 self.capital = state.get('capital', self.initial_capital)
+
+                # 加载持仓和交易记录
                 self.positions = state.get('positions', {})
                 self.trades = state.get('trades', [])
+
+                # 转换时间格式
                 for code, pos in self.positions.items():
                     if 'buy_time' in pos:
                         pos['buy_time'] = datetime.fromisoformat(pos['buy_time'])
                 for trade in self.trades:
                     if 'time' in trade:
                         trade['time'] = datetime.fromisoformat(trade['time'])
+
                 print(f"✅ 加载状态成功")
                 print(f"   可用资金: ¥{self.capital:,.2f}")
                 print(f"   持仓: {len(self.positions)} 只")
@@ -484,18 +523,24 @@ INITIAL_POSITIONS = {
                     if isinstance(pos['buy_time'], datetime):
                         buy_time_str = pos['buy_time'].strftime('%Y-%m-%d %H:%M:%S')
                     writer.writerow([now.strftime('%Y-%m-%d %H:%M:%S'), code, pos['name'], pos['shares'],
-                                   f"{pos['buy_price']:.2f}", buy_time_str, f"{current_price:.2f}",
-                                   f"{market_value:.2f}", f"{profit:.2f}", f"{profit_pct:.2f}"])
+                                     f"{pos['buy_price']:.2f}", buy_time_str, f"{current_price:.2f}",
+                                     f"{market_value:.2f}", f"{profit:.2f}", f"{profit_pct:.2f}"])
                 if self.positions:
                     writer.writerow([])
                     total_profit = total_market_value - total_cost
                     total_profit_pct = (total_profit / total_cost * 100) if total_cost > 0 else 0
-                    writer.writerow(['汇总', '', '', '', '', '', '', f"{total_market_value:.2f}", f"{total_profit:.2f}", f"{total_profit_pct:.2f}"])
+                    writer.writerow(['汇总', '', '', '', '', '', '', f"{total_market_value:.2f}", f"{total_profit:.2f}",
+                                     f"{total_profit_pct:.2f}"])
                 writer.writerow([])
                 total_value = self.capital + total_market_value
                 account_profit = total_value - self.initial_capital
                 account_profit_pct = (account_profit / self.initial_capital * 100)
-                writer.writerow(['账户汇总', '', '', '', '', '', '', f"总资产: {total_value:.2f}", f"可用资金: {self.capital:.2f}", f"总收益: {account_profit_pct:.2f}%"])
+                # 修改：在账户汇总行中保存可用资金和初始资金
+                writer.writerow(['账户汇总', '', '', '', '', '', '',
+                                 f"总资产: {total_value:.2f}",
+                                 f"可用资金: {self.capital:.2f}",
+                                 f"总收益: {account_profit_pct:.2f}%",
+                                 f"初始资金: {self.initial_capital:.2f}"])  # 新增初始资金
             return True
         except Exception as e:
             print(f"❌ 保存持仓CSV失败: {e}")
@@ -821,21 +866,21 @@ INITIAL_POSITIONS = {
                 now = datetime.now()
                 current_time = now.hour * 100 + now.minute
                 is_trading = (930 <= current_time <= 1130) or (1300 <= current_time <= 1500)
-                # if not is_trading:
-                #     self.clear_screen()
-                #     print("="*70)
-                #     print("  全A股监控系统（完整配置版）")
-                #     print("="*70)
-                #     print(f"\n  当前: {now.strftime('%Y-%m-%d %H:%M:%S')}")
-                #     print(f"\n  非交易时间")
-                #     print(f"  交易: 09:30-11:30, 13:00-15:00")
-                #     print(f"\n  等待开盘...")
-                #     print(f"  配置文件: {self.config_file}")
-                #     if time.time() - last_save_time >= 60:
-                #         self.save_positions_csv()
-                #         last_save_time = time.time()
-                #     time.sleep(60)
-                #     continue
+                if not is_trading:
+                    self.clear_screen()
+                    print("="*70)
+                    print("  全A股监控系统（完整配置版）")
+                    print("="*70)
+                    print(f"\n  当前: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+                    print(f"\n  非交易时间")
+                    print(f"  交易: 09:30-11:30, 13:00-15:00")
+                    print(f"\n  等待开盘...")
+                    print(f"  配置文件: {self.config_file}")
+                    if time.time() - last_save_time >= 60:
+                        self.save_positions_csv()
+                        last_save_time = time.time()
+                    time.sleep(60)
+                    continue
                 print(f"\n获取数据... {now.strftime('%H:%M:%S')}")
                 success = self.get_market_data()
                 if success:
