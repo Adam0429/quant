@@ -504,6 +504,11 @@ INITIAL_POSITIONS = {
         """保存持仓到CSV"""
         try:
             now = datetime.now()
+            # 在保存前，先尝试获取一次最新数据（如果不在交易时间，使用现有数据）
+            if not self.market_data and self.valid_codes:
+                print("  非交易时间，尝试获取最新价格...")
+                self.get_market_data()
+
             with open(self.positions_file, 'w', newline='', encoding='utf-8-sig') as f:
                 writer = csv.writer(f)
                 writer.writerow(['更新时间', '股票代码', '股票名称', '持仓数量', '买入价格', '买入时间', '当前价格', '持仓市值', '盈亏金额', '盈亏比例(%)'])
@@ -511,8 +516,27 @@ INITIAL_POSITIONS = {
                 total_market_value = 0
                 for code, pos in self.positions.items():
                     current_price = pos['buy_price']
+                    # 如果市场数据中有该股票，使用市场数据的价格
                     if code in self.market_data:
                         current_price = self.market_data[code]['price']
+                    else:
+                        # 如果没有市场数据，尝试单独获取该股票的价格
+                        try:
+                            market = 'sh' if code.startswith(('600', '601', '603', '605', '688')) else 'sz'
+                            url = f'http://qt.gtimg.cn/q={market}{code}'
+                            headers = {
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                                'Referer': 'http://stock.qq.com/',
+                            }
+                            r = requests.get(url, headers=headers, timeout=5)
+                            r.encoding = 'gbk'
+                            if '=' in r.text and '~' in r.text:
+                                parts = r.text.split('=')[1].strip('"').split('~')
+                                if len(parts) >= 4:
+                                    current_price = self.safe_float(parts[3])
+                        except:
+                            pass  # 如果获取失败，使用买入价格
+
                     market_value = pos['shares'] * current_price
                     cost = pos['shares'] * pos['buy_price']
                     profit = market_value - cost
@@ -850,37 +874,43 @@ INITIAL_POSITIONS = {
     def run(self):
         """运行监控"""
         self.running = True
-        self.save_positions_csv()
-        print("\n" + "="*70)
+        self.save_positions_csv()  # 初始保存
+        print("\n" + "=" * 70)
         print("  全A股监控系统（完整配置版）")
-        print("="*70)
+        print("=" * 70)
         print(f"  配置文件: {self.config_file}")
         print(f"  持仓配置: {self.position_file}")
         print(f"  初始资金: ¥{self.initial_capital:,.0f}")
         print(f"  买入评分: >= {self.buy_score}分")
         print(f"  更新间隔: {self.update_interval}秒")
-        print("="*70)
+        print("=" * 70)
         last_save_time = time.time()
         try:
             while self.running:
                 now = datetime.now()
                 current_time = now.hour * 100 + now.minute
                 is_trading = (930 <= current_time <= 1130) or (1300 <= current_time <= 1500)
+
                 if not is_trading:
                     self.clear_screen()
-                    print("="*70)
+                    print("=" * 70)
                     print("  全A股监控系统（完整配置版）")
-                    print("="*70)
+                    print("=" * 70)
                     print(f"\n  当前: {now.strftime('%Y-%m-%d %H:%M:%S')}")
                     print(f"\n  非交易时间")
                     print(f"  交易: 09:30-11:30, 13:00-15:00")
                     print(f"\n  等待开盘...")
                     print(f"  配置文件: {self.config_file}")
+
+                    # 非交易时间也定期更新持仓CSV（使用最近的数据）
                     if time.time() - last_save_time >= 60:
                         self.save_positions_csv()
                         last_save_time = time.time()
+                        print(f"\n  ✅ 持仓已更新: {self.positions_file}")
+
                     time.sleep(60)
                     continue
+
                 print(f"\n获取数据... {now.strftime('%H:%M:%S')}")
                 success = self.get_market_data()
                 if success:
@@ -898,13 +928,20 @@ INITIAL_POSITIONS = {
                             print(f"\n  买入: {signal['code']} {signal['name']} @ {signal['price']:.2f}")
                             buy_count += 1
                     self.display_status(buy_signals, sell_signals)
-                else:
-                    print("  数据获取失败")
-                    self.display_status([], [])
-                if time.time() - last_save_time >= 60:
+
+                    # 交易时间内，每次获取数据后都更新持仓CSV
                     self.save_positions_csv()
                     last_save_time = time.time()
                     print(f"\n  ✅ 持仓已更新: {self.positions_file}")
+                else:
+                    print("  数据获取失败")
+                    self.display_status([], [])
+                    # 即使获取失败，也保存持仓CSV（使用现有数据）
+                    if time.time() - last_save_time >= 60:
+                        self.save_positions_csv()
+                        last_save_time = time.time()
+                        print(f"\n  ✅ 持仓已更新: {self.positions_file}")
+
                 time.sleep(self.update_interval)
         except KeyboardInterrupt:
             print("\n\n停止运行")
