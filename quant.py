@@ -56,25 +56,23 @@ class PersistentMarketMonitor:
         try:
             new_positions = {}
             loaded_count = 0
-            capital_from_csv = None  # 从CSV中读取的可用资金
-            initial_capital_from_csv = None  # 从CSV中读取的初始资金
+            capital_from_csv = None
+            initial_capital_from_csv = None
 
             with open(self.position_file, 'r', encoding='utf-8-sig') as f:
                 reader = csv.reader(f)
-                rows = list(reader)  # 读取所有行
+                rows = list(reader)
 
             if not rows:
                 print(f"📝 {self.position_file} 为空，按空仓启动")
                 return
 
-            # 先检查最后一行是否是账户汇总行
+            # 检查最后一行是否是账户汇总行
             last_row = rows[-1] if rows else []
             if len(last_row) > 0 and last_row[0] == '账户汇总':
-                # 解析账户汇总行，提取可用资金和初始资金
                 for i, cell in enumerate(last_row):
                     if '可用资金:' in cell:
                         try:
-                            # 提取数字部分
                             value_str = cell.split(':')[1].strip()
                             capital_from_csv = float(value_str)
                         except:
@@ -86,9 +84,8 @@ class PersistentMarketMonitor:
                         except:
                             pass
 
-            # 处理表头和数据行
             header = rows[0]
-            data_rows = rows[1:]  # 跳过表头
+            data_rows = rows[1:]
 
             # 检查必要列
             required_cols = ['股票代码', '股票名称', '持仓数量', '买入价格']
@@ -100,9 +97,14 @@ class PersistentMarketMonitor:
                     print(f"❌ {self.position_file} 格式错误，缺少列: {col}")
                     return
 
+            # 获取买入时间列索引（可选）
+            buy_time_idx = None
+            if '买入时间' in header:
+                buy_time_idx = header.index('买入时间')
+
             # 逐行读取数据
             for row in data_rows:
-                if not row:  # 跳过空行
+                if not row:
                     continue
 
                 # 检查是否遇到汇总行或账户汇总行
@@ -116,7 +118,7 @@ class PersistentMarketMonitor:
                 shares_raw = row[col_indices['持仓数量']] if col_indices['持仓数量'] < len(row) else '0'
                 buy_price_raw = row[col_indices['买入价格']] if col_indices['买入价格'] < len(row) else '0'
 
-                # 跳过无效股票代码（非六位数字）
+                # 跳过无效股票代码
                 if not code or not code.isdigit() or len(code) != 6:
                     continue
 
@@ -134,28 +136,27 @@ class PersistentMarketMonitor:
 
                 # 解析买入时间（如果存在）
                 buy_time = datetime.now()
-                if '买入时间' in header:
-                    buy_time_idx = header.index('买入时间')
-                    if buy_time_idx < len(row):
-                        buy_time_str = row[buy_time_idx].strip()
-                        if buy_time_str:
-                            for fmt in (
-                                    "%Y-%m-%d %H:%M:%S",
-                                    "%Y-%m-%d %H:%M:%S.%f",
-                                    "%Y-%m-%dT%H:%M:%S",
-                                    "%Y-%m-%dT%H:%M:%S.%f",
-                            ):
-                                try:
-                                    buy_time = datetime.strptime(buy_time_str, fmt)
-                                    break
-                                except ValueError:
-                                    pass
+                if buy_time_idx is not None and buy_time_idx < len(row):
+                    buy_time_str = row[buy_time_idx].strip()
+                    if buy_time_str:
+                        for fmt in (
+                            "%Y-%m-%d %H:%M:%S",
+                            "%Y-%m-%d %H:%M:%S.%f",
+                            "%Y-%m-%dT%H:%M:%S",
+                            "%Y-%m-%dT%H:%M:%S.%f",
+                        ):
+                            try:
+                                buy_time = datetime.strptime(buy_time_str, fmt)
+                                break
+                            except ValueError:
+                                pass
 
-                # 存储持仓数据
+                # 存储持仓数据（添加buy_date字段用于T+1检查）
                 new_positions[code] = {
                     'shares': shares,
                     'buy_price': buy_price,
                     'buy_time': buy_time,
+                    'buy_date': buy_time.date(),  # 新增：买入日期
                     'name': name
                 }
                 loaded_count += 1
@@ -247,7 +248,6 @@ INITIAL_POSITIONS = {
                 self.score_cap_min = float(config.get('score_cap_min', 50.0))
                 self.score_cap_max = float(config.get('score_cap_max', 2000.0))
                 self.score_cap_points = int(config.get('score_cap_points', 10))
-                # 新增：最大买入信号数量
                 self.max_buy_signals = int(config.get('max_buy_signals', 10))
                 self.state_file = config.get('state_file', 'trading_state.json')
                 self.positions_file = config.get('positions_file', 'positions.csv')
@@ -295,7 +295,6 @@ INITIAL_POSITIONS = {
         self.score_cap_min = 50.0
         self.score_cap_max = 2000.0
         self.score_cap_points = 10
-        # 新增：最大买入信号数量
         self.max_buy_signals = 10
         self.state_file = 'trading_state.json'
         self.positions_file = 'positions.csv'
@@ -326,7 +325,6 @@ INITIAL_POSITIONS = {
                 writer.writerow(['score_turnover_min', self.score_turnover_min, '换手率下限(%)'])
                 writer.writerow(['score_turnover_max', self.score_turnover_max, '换手率上限(%)'])
                 writer.writerow(['score_turnover_points', self.score_turnover_points, '换手率分数'])
-                # 新增：最大买入信号数量
                 writer.writerow(['max_buy_signals', self.max_buy_signals, '最大买入信号数量'])
                 writer.writerow(['score_amount_min', self.score_amount_min, '放量阈值(元)'])
                 writer.writerow(['score_amount_points', self.score_amount_points, '放量分数'])
@@ -362,22 +360,19 @@ INITIAL_POSITIONS = {
 
     def fetch_all_stock_codes(self):
         """获取所有A股代码（含主板、创业板、科创板）"""
-        # 修复：添加完整的请求头
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Referer': '://stock.qq.com/',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-        }        # 添加创业板(300)和科创板(688)前缀
+        }
         prefixes = [
-            '600', '601', '603', '605',  # 主板上海
-            '000', '001', '002', '003',  # 主板深圳
-            '300',  # 创业板
-            '688'  # 科创板
+            '600', '601', '603', '605',
+            '000', '001', '002', '003',
+            '300', '688'
         ]
         all_candidates = []
         for prefix in prefixes:
-            # 科创板(688)只有3位数字
             if prefix == '688':
                 for i in range(1000):
                     all_candidates.append(f"{prefix}{i:03d}")
@@ -392,9 +387,6 @@ INITIAL_POSITIONS = {
             batch = all_candidates[start:start + batch_size]
             code_list = []
             for c in batch:
-                # 市场分配规则：
-                # 600/601/603/605/688开头 → 上海市场(sh)
-                # 000/001/002/003/300开头 → 深圳市场(sz)
                 if c.startswith(('600', '601', '603', '605', '688')):
                     market = 'sh'
                 else:
@@ -420,7 +412,6 @@ INITIAL_POSITIONS = {
                 continue
             time.sleep(0.2)
 
-        # 统计各板块数量
         main_sh = sum(1 for c in valid_codes if c.startswith(('600', '601', '603', '605')))
         main_sz = sum(1 for c in valid_codes if c.startswith(('000', '001', '002', '003')))
         gem = sum(1 for c in valid_codes if c.startswith('300'))
@@ -444,10 +435,7 @@ INITIAL_POSITIONS = {
                 with open(self.state_file, 'r', encoding='utf-8') as f:
                     state = json.load(f)
 
-                # 优先使用状态文件中的可用资金
                 self.capital = state.get('capital', self.initial_capital)
-
-                # 加载持仓和交易记录
                 self.positions = state.get('positions', {})
                 self.trades = state.get('trades', [])
 
@@ -455,6 +443,10 @@ INITIAL_POSITIONS = {
                 for code, pos in self.positions.items():
                     if 'buy_time' in pos:
                         pos['buy_time'] = datetime.fromisoformat(pos['buy_time'])
+                    # 新增：加载buy_date
+                    if 'buy_date' in pos:
+                        pos['buy_date'] = datetime.strptime(pos['buy_date'], '%Y-%m-%d').date()
+
                 for trade in self.trades:
                     if 'time' in trade:
                         trade['time'] = datetime.fromisoformat(trade['time'])
@@ -489,6 +481,9 @@ INITIAL_POSITIONS = {
                 state['positions'][code] = pos.copy()
                 if 'buy_time' in state['positions'][code]:
                     state['positions'][code]['buy_time'] = pos['buy_time'].isoformat()
+                # 新增：保存buy_date
+                if 'buy_date' in state['positions'][code]:
+                    state['positions'][code]['buy_date'] = pos['buy_date'].isoformat()
             for trade in self.trades:
                 state['trades'].append(trade.copy())
                 if 'time' in state['trades'][-1]:
@@ -504,7 +499,6 @@ INITIAL_POSITIONS = {
         """保存持仓到CSV"""
         try:
             now = datetime.now()
-            # 在保存前，先尝试获取一次最新数据（如果不在交易时间，使用现有数据）
             if not self.market_data and self.valid_codes:
                 print("  非交易时间，尝试获取最新价格...")
                 self.get_market_data()
@@ -516,26 +510,8 @@ INITIAL_POSITIONS = {
                 total_market_value = 0
                 for code, pos in self.positions.items():
                     current_price = pos['buy_price']
-                    # 如果市场数据中有该股票，使用市场数据的价格
                     if code in self.market_data:
                         current_price = self.market_data[code]['price']
-                    else:
-                        # 如果没有市场数据，尝试单独获取该股票的价格
-                        try:
-                            market = 'sh' if code.startswith(('600', '601', '603', '605', '688')) else 'sz'
-                            url = f'http://qt.gtimg.cn/q={market}{code}'
-                            headers = {
-                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                                'Referer': 'http://stock.qq.com/',
-                            }
-                            r = requests.get(url, headers=headers, timeout=5)
-                            r.encoding = 'gbk'
-                            if '=' in r.text and '~' in r.text:
-                                parts = r.text.split('=')[1].strip('"').split('~')
-                                if len(parts) >= 4:
-                                    current_price = self.safe_float(parts[3])
-                        except:
-                            pass  # 如果获取失败，使用买入价格
 
                     market_value = pos['shares'] * current_price
                     cost = pos['shares'] * pos['buy_price']
@@ -559,19 +535,16 @@ INITIAL_POSITIONS = {
                 total_value = self.capital + total_market_value
                 account_profit = total_value - self.initial_capital
                 account_profit_pct = (account_profit / self.initial_capital * 100)
-                # 修改：在账户汇总行中保存可用资金和初始资金
-                writer.writerow(['账户汇总', '', '', '', '', '', '',
-                                 f"总资产: {total_value:.2f}",
+                writer.writerow([f"总资产: {total_value:.2f}",
                                  f"可用资金: {self.capital:.2f}",
                                  f"总收益: {account_profit_pct:.2f}%",
-                                 f"初始资金: {self.initial_capital:.2f}"])  # 新增初始资金
+                                 f"初始资金: {self.initial_capital:.2f}"])
             return True
         except Exception as e:
             print(f"❌ 保存持仓CSV失败: {e}")
             return False
 
     def save_trade_csv(self, trade):
-        """保存单笔交易到CSV"""
         try:
             file_exists = os.path.exists(self.trades_file)
             with open(self.trades_file, 'a', newline='', encoding='utf-8-sig') as f:
@@ -621,7 +594,6 @@ INITIAL_POSITIONS = {
                         market = 'sz'
                     code_list.append(f'{market}{code}')
                 url = f'http://qt.gtimg.cn/q={",".join(code_list)}'
-                # 修复：添加完整的请求头
                 headers = {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                     'Referer': 'http://stock.qq.com/',
@@ -632,7 +604,6 @@ INITIAL_POSITIONS = {
                 }
                 try:
                     r = requests.get(url, headers=headers, timeout=10)
-                    # 修复：指定 GBK 编码
                     r.encoding = 'gbk'
                     for line in r.text.strip().split('\n'):
                         if '=' not in line or '~' not in line:
@@ -668,7 +639,6 @@ INITIAL_POSITIONS = {
                 self.market_data = all_stocks
                 self.last_update = datetime.now()
 
-                # 统计各板块
                 main_sh = sum(1 for s in all_stocks.values() if s['code'].startswith(('600', '601', '603', '605')))
                 main_sz = sum(1 for s in all_stocks.values() if s['code'].startswith(('000', '001', '002', '003')))
                 gem = sum(1 for s in all_stocks.values() if s['code'].startswith('300'))
@@ -704,7 +674,6 @@ INITIAL_POSITIONS = {
         if change_pct <= self.score_pct_down:
             return 0, ['跌幅大']
 
-        # 涨幅得分（保持原有逻辑）
         if self.score_pct_min <= change_pct <= self.score_pct_max:
             score += self.score_pct_points
             reasons.append(f'涨{change_pct:.1f}%')
@@ -712,37 +681,29 @@ INITIAL_POSITIONS = {
             score += self.score_pct_small_points
             reasons.append('小涨')
 
-        # 换手率得分 - 改为线性得分，换手率越高分数越高
         if turnover >= self.score_turnover_min:
-            # 计算换手率得分比例（0-1之间）
             turnover_ratio = min(1.0, (turnover - self.score_turnover_min) /
                                  (self.score_turnover_max - self.score_turnover_min))
-            # 计算实际得分（0到满分之间）
             turnover_score = turnover_ratio * self.score_turnover_points
             score += turnover_score
             reasons.append(f'换{turnover:.1f}%')
 
-        # 放量得分（保持原有逻辑）
         if amount > self.score_amount_min:
             score += self.score_amount_points
             reasons.append('放量')
 
-        # 高开得分（保持原有逻辑）
         if price > open_price:
             score += self.score_open_points
             reasons.append('高开')
 
-        # 新高得分（保持原有逻辑）
         if high > 0 and price >= high * self.score_high_pct:
             score += self.score_high_points
             reasons.append('新高')
 
-        # PE得分（保持原有逻辑）
         if self.score_pe_min <= pe <= self.score_pe_max:
             score += self.score_pe_points
             reasons.append('PE合理')
 
-        # 市值得分（保持原有逻辑）
         cap = stock['market_cap'] / 1e8
         if self.score_cap_min <= cap <= self.score_cap_max:
             score += self.score_cap_points
@@ -751,14 +712,29 @@ INITIAL_POSITIONS = {
         return score, reasons
 
     def generate_signals(self):
-        """生成交易信号"""
+        """生成交易信号（添加T+1规则检查）"""
         buy_signals = []
         sell_signals = []
+
+        # 获取当前日期
+        today = datetime.now().date()
 
         for code, pos in list(self.positions.items()):
             if code in self.market_data:
                 stock = self.market_data[code]
                 profit = (stock['price'] - pos['buy_price']) / pos['buy_price']
+
+                # 获取买入日期
+                buy_date = pos.get('buy_date')
+                if buy_date is None:
+                    # 如果没有buy_date，使用buy_time的日期
+                    buy_date = pos['buy_time'].date()
+
+                # T+1规则检查：如果买入日期等于今天，则不能卖出
+                if buy_date >= today:
+                    # 跳过生成卖出信号
+                    continue
+
                 if profit <= self.stop_loss:
                     sell_signals.append({'code': code, 'name': stock['name'], 'price': stock['price'], 'reason': f'止损{profit:.2%}', 'profit_rate': profit})
                 elif profit >= self.take_profit:
@@ -785,7 +761,15 @@ INITIAL_POSITIONS = {
         cost = shares * price
         if cost > self.capital:
             return False
-        self.positions[code] = {'shares': shares, 'buy_price': price, 'buy_time': datetime.now(), 'name': signal['name']}
+
+        buy_time = datetime.now()
+        self.positions[code] = {
+            'shares': shares,
+            'buy_price': price,
+            'buy_time': buy_time,
+            'buy_date': buy_time.date(),  # 新增：记录买入日期
+            'name': signal['name']
+        }
         self.capital -= cost
         trade = {'time': datetime.now(), 'type': 'BUY', 'code': code, 'name': signal['name'], 'price': price, 'shares': shares, 'reason': '+'.join(signal['reasons'][:3]), 'score': signal['score']}
         self.trades.append(trade)
@@ -799,7 +783,19 @@ INITIAL_POSITIONS = {
         code = signal['code']
         if code not in self.positions:
             return False
+
         pos = self.positions[code]
+
+        # T+1规则检查：如果买入日期等于今天，则不能卖出
+        today = datetime.now().date()
+        buy_date = pos.get('buy_date')
+        if buy_date is None:
+            buy_date = pos['buy_time'].date()
+
+        if buy_date >= today:
+            print(f"  ⚠️ T+1规则：{code} 今天买入，不能卖出")
+            return False
+
         price = signal['price']
         shares = pos['shares']
         revenue = shares * price
@@ -815,12 +811,12 @@ INITIAL_POSITIONS = {
 
     def clear_screen(self):
         """清屏"""
-        # print('\033[2J\033[H', end='')
         pass
 
     def display_status(self, buy_signals, sell_signals):
         """显示状态"""
         now = datetime.now()
+        today = now.date()
         total = len(self.market_data)
         up = sum(1 for s in self.market_data.values() if s['change_pct'] > 0)
         down = sum(1 for s in self.market_data.values() if s['change_pct'] < 0)
@@ -838,7 +834,7 @@ INITIAL_POSITIONS = {
         self.clear_screen()
         print("="*70)
         print(f"  全A股监控系统 | {now.strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"  配置: {self.config_file} | 买入评分>= {self.buy_score}分")
+        print(f"  配置: {self.config_file} | 买入评分>= {self.buy_score}分 | T+1交易规则")
         print("="*70)
         print(f"\n  市场: {total}只 | 上{up} | 下{down} | 平{flat} | 涨停{limit_up} | 跌停{limit_down}")
         print(f"  账户: 可用{self.capital:,.0f} | 持仓{pos_value:,.0f} | 总资产{total_value:,.0f} | 收益{ret:+.2f}%")
@@ -849,7 +845,10 @@ INITIAL_POSITIONS = {
                     cur = self.market_data[code]['price']
                     pr = (cur - pos['buy_price']) / pos['buy_price'] * 100
                     emoji = '+' if pr >= 0 else '-'
-                    print(f"    [{emoji}] {code} {pos['name']:<8} {pos['shares']}股 成本:{pos['buy_price']:.2f} 现价:{cur:.2f} {pr:+.2f}%")
+                    buy_date = pos.get('buy_date', pos['buy_time'].date())
+                    # T+1标记
+                    t1_flag = " [T+1]" if buy_date >= today else ""
+                    print(f"    [{emoji}] {code} {pos['name']:<8} {pos['shares']}股 成本:{pos['buy_price']:.2f} 现价:{cur:.2f} {pr:+.2f}%{t1_flag}")
         top5 = sorted(self.market_data.values(), key=lambda x: x['change_pct'], reverse=True)[:5]
         print(f"\n  涨幅前5:")
         for s in top5:
@@ -874,15 +873,16 @@ INITIAL_POSITIONS = {
     def run(self):
         """运行监控"""
         self.running = True
-        self.save_positions_csv()  # 初始保存
+        self.save_positions_csv()
         print("\n" + "=" * 70)
-        print("  全A股监控系统（完整配置版）")
+        print("  全A股监控系统（完整配置版）- T+1交易规则")
         print("=" * 70)
         print(f"  配置文件: {self.config_file}")
         print(f"  持仓配置: {self.position_file}")
         print(f"  初始资金: ¥{self.initial_capital:,.0f}")
         print(f"  买入评分: >= {self.buy_score}分")
         print(f"  更新间隔: {self.update_interval}秒")
+        print(f"  交易规则: T+1（当天买入，次日及以后可卖）")
         print("=" * 70)
         last_save_time = time.time()
         try:
@@ -894,7 +894,7 @@ INITIAL_POSITIONS = {
                 if not is_trading:
                     self.clear_screen()
                     print("=" * 70)
-                    print("  全A股监控系统（完整配置版）")
+                    print("  全A股监控系统（完整配置版）- T+1交易规则")
                     print("=" * 70)
                     print(f"\n  当前: {now.strftime('%Y-%m-%d %H:%M:%S')}")
                     print(f"\n  非交易时间")
@@ -902,7 +902,6 @@ INITIAL_POSITIONS = {
                     print(f"\n  等待开盘...")
                     print(f"  配置文件: {self.config_file}")
 
-                    # 非交易时间也定期更新持仓CSV（使用最近的数据）
                     if time.time() - last_save_time >= 60:
                         self.save_positions_csv()
                         last_save_time = time.time()
@@ -929,14 +928,12 @@ INITIAL_POSITIONS = {
                             buy_count += 1
                     self.display_status(buy_signals, sell_signals)
 
-                    # 交易时间内，每次获取数据后都更新持仓CSV
                     self.save_positions_csv()
                     last_save_time = time.time()
                     print(f"\n  ✅ 持仓已更新: {self.positions_file}")
                 else:
                     print("  数据获取失败")
                     self.display_status([], [])
-                    # 即使获取失败，也保存持仓CSV（使用现有数据）
                     if time.time() - last_save_time >= 60:
                         self.save_positions_csv()
                         last_save_time = time.time()
@@ -984,7 +981,7 @@ INITIAL_POSITIONS = {
 # ================================================
 if __name__ == "__main__":
     print("="*70)
-    print("  全A股监控系统（完整配置版）")
+    print("  全A股监控系统（完整配置版）- T+1交易规则")
     print("="*70)
     monitor = PersistentMarketMonitor(config_file='config.csv', position_file='positions.csv')
     monitor.run()
