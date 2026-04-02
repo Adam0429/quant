@@ -535,7 +535,8 @@ INITIAL_POSITIONS = {
                 total_value = self.capital + total_market_value
                 account_profit = total_value - self.initial_capital
                 account_profit_pct = (account_profit / self.initial_capital * 100)
-                writer.writerow([f"总资产: {total_value:.2f}",
+                writer.writerow(['账户汇总', '', '', '', '', '', '',
+                                 f"总资产: {total_value:.2f}",
                                  f"可用资金: {self.capital:.2f}",
                                  f"总收益: {account_profit_pct:.2f}%",
                                  f"初始资金: {self.initial_capital:.2f}"])
@@ -545,6 +546,7 @@ INITIAL_POSITIONS = {
             return False
 
     def save_trade_csv(self, trade):
+        """保存单笔交易到CSV"""
         try:
             file_exists = os.path.exists(self.trades_file)
             with open(self.trades_file, 'a', newline='', encoding='utf-8-sig') as f:
@@ -656,7 +658,7 @@ INITIAL_POSITIONS = {
             return False
 
     def calculate_score(self, stock):
-        """计算股票评分"""
+        """计算股票评分（改进版，增加区分度）"""
         score = 0
         reasons = []
         change_pct = stock['change_pct']
@@ -666,6 +668,10 @@ INITIAL_POSITIONS = {
         open_price = stock['open']
         high = stock['high']
         pe = stock['pe']
+        volume = stock['volume']
+
+        # 基础分：100分制，各维度权重调整
+        # 涨幅：30分，换手率：20分，成交量：15分，技术指标：25分，基本面：10分
 
         if 'ST' in stock['name'] or '*ST' in stock['name']:
             return 0, ['ST']
@@ -674,45 +680,144 @@ INITIAL_POSITIONS = {
         if change_pct <= self.score_pct_down:
             return 0, ['跌幅大']
 
-        if self.score_pct_min <= change_pct <= self.score_pct_max:
-            score += self.score_pct_points
-            reasons.append(f'涨{change_pct:.1f}%')
-        elif self.score_pct_min_small <= change_pct < self.score_pct_max_small:
-            score += self.score_pct_small_points
-            reasons.append('小涨')
+        # 1. 涨幅得分（30分）- 改为阶梯式得分，增加区分度
+        if change_pct >= 8.0:
+            score += 30
+            reasons.append(f'大涨{change_pct:.1f}%')
+        elif change_pct >= 5.0:
+            score += 25
+            reasons.append(f'中涨{change_pct:.1f}%')
+        elif change_pct >= 2.0:
+            score += 20
+            reasons.append(f'小涨{change_pct:.1f}%')
+        elif change_pct >= 0.5:
+            score += 15
+            reasons.append(f'微涨{change_pct:.1f}%')
+        elif change_pct > 0:
+            score += 10
+            reasons.append(f'略涨{change_pct:.1f}%')
 
-        if turnover >= self.score_turnover_min:
-            turnover_ratio = min(1.0, (turnover - self.score_turnover_min) /
-                                 (self.score_turnover_max - self.score_turnover_min))
-            turnover_score = turnover_ratio * self.score_turnover_points
-            score += turnover_score
-            reasons.append(f'换{turnover:.1f}%')
+        # 2. 换手率得分（20分）- 阶梯式+线性组合
+        if turnover >= 15.0:
+            score += 20
+            reasons.append(f'高换手{turnover:.1f}%')
+        elif turnover >= 10.0:
+            score += 18
+            reasons.append(f'活跃{turnover:.1f}%')
+        elif turnover >= 5.0:
+            score += 15
+            reasons.append(f'正常{turnover:.1f}%')
+        elif turnover >= 2.0:
+            score += 10
+            reasons.append(f'低换手{turnover:.1f}%')
+        else:
+            score += 5
+            reasons.append(f'低迷{turnover:.1f}%')
 
-        if amount > self.score_amount_min:
-            score += self.score_amount_points
+        # 3. 成交量得分（15分）- 根据绝对金额和相对放量
+        amount_score = 0
+        if amount > 500000000:  # 5亿以上
+            amount_score = 15
+            reasons.append('巨量')
+        elif amount > 300000000:  # 3亿以上
+            amount_score = 12
             reasons.append('放量')
+        elif amount > 100000000:  # 1亿以上
+            amount_score = 8
+            reasons.append('温和放量')
+        elif amount > 50000000:  # 5000万以上
+            amount_score = 5
+            reasons.append('缩量')
+        else:
+            amount_score = 2
+            reasons.append('地量')
+        score += amount_score
 
+        # 4. 技术指标得分（25分）
+        tech_score = 0
+
+        # 高开得分（5分）
         if price > open_price:
-            score += self.score_open_points
+            tech_score += 5
             reasons.append('高开')
 
-        if high > 0 and price >= high * self.score_high_pct:
-            score += self.score_high_points
-            reasons.append('新高')
+        # 新高得分（10分）- 分阶梯
+        if high > 0:
+            high_ratio = price / high
+            if high_ratio >= 0.99:
+                tech_score += 10
+                reasons.append('创新高')
+            elif high_ratio >= 0.95:
+                tech_score += 8
+                reasons.append('接近新高')
+            elif high_ratio >= 0.90:
+                tech_score += 5
+            else:
+                tech_score += 2
 
-        if self.score_pe_min <= pe <= self.score_pe_max:
-            score += self.score_pe_points
-            reasons.append('PE合理')
+        # 成交量活跃度（10分）- 基于换手率和成交量的综合判断
+        if turnover >= 5.0 and amount > 100000000:
+            tech_score += 10
+            reasons.append('量价配合')
+        elif turnover >= 3.0 and amount > 50000000:
+            tech_score += 7
+            reasons.append('量价健康')
+        elif turnover >= 1.0:
+            tech_score += 3
+            reasons.append('量能稳定')
 
-        cap = stock['market_cap'] / 1e8
-        if self.score_cap_min <= cap <= self.score_cap_max:
-            score += self.score_cap_points
+        score += tech_score
+
+        # 5. 基本面得分（10分）
+        fundamental_score = 0
+
+        # PE得分（5分）
+        if pe > 0:
+            if 10 <= pe <= 30:
+                fundamental_score += 5
+                reasons.append('PE合理')
+            elif 5 <= pe < 10 or 30 < pe <= 50:
+                fundamental_score += 3
+                reasons.append('PE可接受')
+            else:
+                fundamental_score += 1
+                reasons.append('PE特殊')
+
+        # 市值得分（5分）
+        cap = stock['market_cap'] / 1e8  # 转换为亿
+        if 50 <= cap <= 500:
+            fundamental_score += 5
             reasons.append('市值适中')
+        elif 20 <= cap < 50 or 500 < cap <= 1000:
+            fundamental_score += 3
+            reasons.append('市值可接受')
+        else:
+            fundamental_score += 1
+            reasons.append('市值特殊')
+
+        score += fundamental_score
+
+        # 6. 添加区分度因子（防止并列第一）
+        # 根据股票的流通性和活跃度添加微小调整
+        uniqueness_factor = 0
+
+        # 基于代码尾数的微小差异（避免完全相同的分数）
+        code_num = int(stock['code']) % 100
+        uniqueness_factor += (code_num % 10) * 0.1  # 0-0.9分的微小差异
+
+        # 基于价格的微小差异
+        price_factor = (price % 10) * 0.05  # 0-0.45分的微小差异
+        uniqueness_factor += price_factor
+
+        score += uniqueness_factor
+
+        # 确保分数在0-100之间
+        score = max(0, min(100, score))
 
         return score, reasons
 
     def generate_signals(self):
-        """生成交易信号（添加T+1规则检查）"""
+        """生成交易信号（改进版，增加次级排序）"""
         buy_signals = []
         sell_signals = []
 
@@ -727,39 +832,65 @@ INITIAL_POSITIONS = {
                 # 获取买入日期
                 buy_date = pos.get('buy_date')
                 if buy_date is None:
-                    # 如果没有buy_date，使用buy_time的日期
                     buy_date = pos['buy_time'].date()
 
                 # T+1规则检查：如果买入日期等于今天，则不能卖出
                 if buy_date >= today:
-                    # 跳过生成卖出信号
                     continue
 
                 if profit <= self.stop_loss:
-                    sell_signals.append({'code': code, 'name': stock['name'], 'price': stock['price'], 'reason': f'止损{profit:.2%}', 'profit_rate': profit})
+                    sell_signals.append(
+                        {'code': code, 'name': stock['name'], 'price': stock['price'], 'reason': f'止损{profit:.2%}',
+                         'profit_rate': profit})
                 elif profit >= self.take_profit:
-                    sell_signals.append({'code': code, 'name': stock['name'], 'price': stock['price'], 'reason': f'止盈{profit:.2%}', 'profit_rate': profit})
+                    sell_signals.append(
+                        {'code': code, 'name': stock['name'], 'price': stock['price'], 'reason': f'止盈{profit:.2%}',
+                         'profit_rate': profit})
 
         for code, stock in self.market_data.items():
             if code in self.positions:
                 continue
             score, reasons = self.calculate_score(stock)
             if score >= self.buy_score:
-                buy_signals.append({'code': code, 'name': stock['name'], 'price': stock['price'], 'score': score, 'reasons': reasons})
+                buy_signals.append({
+                    'code': code,
+                    'name': stock['name'],
+                    'price': stock['price'],
+                    'score': score,
+                    'reasons': reasons,
+                    # 添加次级排序字段
+                    'change_pct': stock['change_pct'],
+                    'turnover': stock['turnover'],
+                    'volume': stock['volume']
+                })
 
-        buy_signals.sort(key=lambda x: x['score'], reverse=True)
+        # 改进排序：先按分数降序，分数相同时按涨幅降序，再按换手率降序
+        buy_signals.sort(key=lambda x: (
+            x['score'],  # 主要排序：分数
+            x['change_pct'],  # 次级排序：涨幅
+            x['turnover'],  # 三级排序：换手率
+            x['volume']  # 四级排序：成交量
+        ), reverse=True)
+
         return buy_signals, sell_signals
 
     def execute_buy(self, signal):
         """执行买入"""
+        print('准备执行买入',signal['name'])
         code = signal['code']
         price = signal['price']
         position_amount = self.initial_capital * self.position_size
+        if self.capital < position_amount:
+            position_amount = self.capital
         shares = int(position_amount / price / 100) * 100
+        print('可用购买资金',position_amount)
+        print('可以买入',shares,'股')
         if shares < 100:
+            print('余额买入不够100股，放弃')
             return False
         cost = shares * price
         if cost > self.capital:
+            print('余额买入不够100股，放弃')
             return False
 
         buy_time = datetime.now()
@@ -814,15 +945,15 @@ INITIAL_POSITIONS = {
         pass
 
     def display_status(self, buy_signals, sell_signals):
-        """显示状态"""
+        """显示状态（改进版）"""
         now = datetime.now()
         today = now.date()
-        total = len(self.market_data)
-        up = sum(1 for s in self.market_data.values() if s['change_pct'] > 0)
-        down = sum(1 for s in self.market_data.values() if s['change_pct'] < 0)
+        total = len(self.market_data) if self.market_data else 0
+        up = sum(1 for s in self.market_data.values() if s['change_pct'] > 0) if self.market_data else 0
+        down = sum(1 for s in self.market_data.values() if s['change_pct'] < 0) if self.market_data else 0
         flat = total - up - down
-        limit_up = sum(1 for s in self.market_data.values() if s['change_pct'] >= 9.9)
-        limit_down = sum(1 for s in self.market_data.values() if s['change_pct'] <= -9.9)
+        limit_up = sum(1 for s in self.market_data.values() if s['change_pct'] >= 9.9) if self.market_data else 0
+        limit_down = sum(1 for s in self.market_data.values() if s['change_pct'] <= -9.9) if self.market_data else 0
         pos_value = 0
         for code, pos in self.positions.items():
             if code in self.market_data:
@@ -832,12 +963,13 @@ INITIAL_POSITIONS = {
         total_value = self.capital + pos_value
         ret = (total_value - self.initial_capital) / self.initial_capital * 100
         self.clear_screen()
-        print("="*70)
+        print("=" * 70)
         print(f"  全A股监控系统 | {now.strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"  配置: {self.config_file} | 买入评分>= {self.buy_score}分 | T+1交易规则")
-        print("="*70)
+        print("=" * 70)
         print(f"\n  市场: {total}只 | 上{up} | 下{down} | 平{flat} | 涨停{limit_up} | 跌停{limit_down}")
         print(f"  账户: 可用{self.capital:,.0f} | 持仓{pos_value:,.0f} | 总资产{total_value:,.0f} | 收益{ret:+.2f}%")
+
         if self.positions:
             print(f"\n  持仓({len(self.positions)}只):")
             for code, pos in self.positions.items():
@@ -846,28 +978,51 @@ INITIAL_POSITIONS = {
                     pr = (cur - pos['buy_price']) / pos['buy_price'] * 100
                     emoji = '+' if pr >= 0 else '-'
                     buy_date = pos.get('buy_date', pos['buy_time'].date())
-                    # T+1标记
                     t1_flag = " [T+1]" if buy_date >= today else ""
-                    print(f"    [{emoji}] {code} {pos['name']:<8} {pos['shares']}股 成本:{pos['buy_price']:.2f} 现价:{cur:.2f} {pr:+.2f}%{t1_flag}")
-        top5 = sorted(self.market_data.values(), key=lambda x: x['change_pct'], reverse=True)[:5]
-        print(f"\n  涨幅前5:")
-        for s in top5:
-            print(f"    {s['code']} {s['name']:<10} {s['price']:>8.2f} +{s['change_pct']:.2f}%")
-        print(f"\n  买入信号(>={self.buy_score}分):")
-        for s in buy_signals[:self.max_buy_signals]:
-            print(f"    [+] {s['code']} {s['name']:<10} {s['score']}分 | {', '.join(s['reasons'][:3])}")
+                    print(
+                        f"    [{emoji}] {code} {pos['name']:<8} {pos['shares']}股 成本:{pos['buy_price']:.2f} 现价:{cur:.2f} {pr:+.2f}%{t1_flag}")
+
+        if self.market_data:
+            top5 = sorted(self.market_data.values(), key=lambda x: x['change_pct'], reverse=True)[:5]
+            print(f"\n  涨幅前5:")
+            for s in top5:
+                print(f"    {s['code']} {s['name']:<10} {s['price']:>8.2f} +{s['change_pct']:.2f}%")
+
+        # 显示买入信号（包含分数分布信息）
+        if buy_signals:
+            # 计算分数分布
+            scores = [s['score'] for s in buy_signals]
+            if scores:
+                max_score = max(scores)
+                min_score = min(scores)
+                avg_score = sum(scores) / len(scores)
+                print(f"\n  买入信号(>={self.buy_score}分):")
+                print(f"    分数分布: 最高{max_score:.1f}分, 最低{min_score:.1f}分, 平均{avg_score:.1f}分")
+
+                # 显示前10个信号，包含详细分数
+                for i, s in enumerate(buy_signals[:10]):
+                    print(
+                            f"    [1] {s['code']} {s['name']:<10} {s['score']:.1f}分 | {', '.join(s['reasons'][:3])}")
+        else:
+            print(f"\n  买入信号: 无")
+
         if sell_signals:
             print(f"\n  卖出信号:")
             for s in sell_signals:
                 print(f"    [-] {s['code']} {s['name']} | {s['reason']}")
+
         if self.trades:
-            print(f"\n  最近交易:")
-            for t in self.trades[-3:]:
+            print(f"\n  最近交易(最近5条):")
+            recent_trades = self.trades[-5:] if len(self.trades) >= 5 else self.trades
+            for t in recent_trades:
                 if t['type'] == 'BUY':
-                    print(f"    {t['time'].strftime('%H:%M:%S')} 买入 {t['code']} {t['name']:<8} {t['shares']}股 @ {t['price']:.2f}")
+                    print(
+                        f"    {t['time']} 买入 {t['code']} {t['name']:<8} {t['shares']}股 @ {t['price']:.2f}")
                 else:
                     emoji = '+' if t.get('profit', 0) >= 0 else '-'
-                    print(f"    {t['time'].strftime('%H:%M:%S')} {emoji}卖出 {t['code']} {t['name']:<8} {t.get('profit_rate', 0):+.2%}")
+                    print(
+                        f"    {t['time']} {emoji}卖出 {t['code']} {t['name']:<8} {t.get('profit_rate', 0):+.2%}")
+
         print(f"\n  {self.update_interval}秒后更新 | Ctrl+C停止")
 
     def run(self):
@@ -902,6 +1057,16 @@ INITIAL_POSITIONS = {
                     print(f"\n  等待开盘...")
                     print(f"  配置文件: {self.config_file}")
 
+                    # 非交易时间也显示持仓、收益率和最近操作
+                    # 尝试获取一次市场数据（如果还没有）
+                    if not self.market_data and self.valid_codes:
+                        print(f"\n  尝试获取市场数据...")
+                        self.get_market_data()
+
+                    # 显示状态信息（包括持仓、收益率、最近操作）
+                    self.display_status([], [])
+
+                    # 定期保存持仓CSV
                     if time.time() - last_save_time >= 60:
                         self.save_positions_csv()
                         last_save_time = time.time()
@@ -971,7 +1136,6 @@ INITIAL_POSITIONS = {
         print(f"\n  最终资产: {final_value:,.0f}")
         print(f"  总收益率: {ret:+.2f}%")
         print(f"\n  文件:")
-        print(f"  - 配置: {self.config_file}")
         print(f"  - 持仓配置: {self.position_file}")
         print(f"  - 持仓文件: {self.positions_file}")
         print(f"  - 交易文件: {self.trades_file}")
@@ -980,7 +1144,7 @@ INITIAL_POSITIONS = {
 #                     主程序
 # ================================================
 if __name__ == "__main__":
-    print("="*70)
+    print("="* 70 +"- 配置: {self.config_file}")
     print("  全A股监控系统（完整配置版）- T+1交易规则")
     print("="*70)
     monitor = PersistentMarketMonitor(config_file='config.csv', position_file='positions.csv')
