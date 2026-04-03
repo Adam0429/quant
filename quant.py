@@ -998,9 +998,7 @@ INITIAL_POSITIONS = {
                 avg_score = sum(scores) / len(scores)
                 print(f"\n  买入信号(>={self.buy_score}分):")
                 print(f"    分数分布: 最高{max_score:.1f}分, 最低{min_score:.1f}分, 平均{avg_score:.1f}分")
-
-                # 显示前10个信号，包含详细分数
-                for i, s in enumerate(buy_signals[:10]):
+                for i, s in enumerate(buy_signals[:self.max_buy_signals]):
                     print(
                             f"    [1] {s['code']} {s['name']:<10} {s['score']:.1f}分 | {', '.join(s['reasons'][:3])}")
         else:
